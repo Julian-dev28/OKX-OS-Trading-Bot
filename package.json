@@ -1,17 +1,25 @@
 {
-  "name": "nodejs",
+  "name": "@okx/trading-bot",
   "version": "1.0.0",
-  "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@coinbase/coinbase-sdk": "^0.5.0",
+    "@okxweb3/coin-ethereum": "^1.0.9",
+    "@okxweb3/crypto-lib": "^1.0.5",
+    "@replit/database": "^3.0.1",
     "@types/node": "^18.0.6",
-    "grammy": "^1.29.0"
+    "crypto": "^1.0.1",
+    "decimal.js": "^10.4.3",
+    "grammy": "^1.29.0",
+    "node-fetch": "^2.7.0",
+    "web3": "^4.12.1"
   }
 }

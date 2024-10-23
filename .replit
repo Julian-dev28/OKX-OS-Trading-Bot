@@ -13,8 +13,8 @@ language = "nodejs"
 
 [deployment]
 run = ["node", "index.js"]
-deploymentTarget = "cloudrun"
-ignorePorts = false
+deploymentTarget = "gce"
+ignorePorts = true
 
 [workflows]
 runButton = "Run Project"
@@ -52,4 +52,3 @@ agentRequireRestartOnSave = false
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cat /home/runner/Trading-Bot/.replit/logs/node-index.js.log"
