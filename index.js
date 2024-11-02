@@ -4,8 +4,8 @@ const { EthWallet } = require("@okxweb3/coin-ethereum");
 const fetch = require("node-fetch");
 const crypto = require("crypto");
 
-// Ensure environment variables are set
-const requiredEnvVars = [
+// Validate required environment variables
+const REQUIRED_ENV = [
   "TELEGRAM_BOT_TOKEN",
   "OKX_PROJECT_ID",
   "OKX_API_KEY",
@@ -14,57 +14,39 @@ const requiredEnvVars = [
   "ENCRYPTION_KEY",
 ];
 
-requiredEnvVars.forEach((env) => {
+for (const env of REQUIRED_ENV) {
   if (!process.env[env]) {
-    throw new Error(`missing ${env} environment variable`);
+    throw new Error(`Missing ${env} environment variable`);
   }
-});
+}
 
-// Create a bot object
+// Initialize bot and wallet
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
+const wallet = new EthWallet();
 
-// In-memory storage for user states
+// Constants
+const API_BASE_URL = "https://www.okx.com";
+const CHAIN_ID = "196";
+
+// In-memory state management
 const userStates = {};
 
-// Configuration
-const apiBaseUrl = "https://www.okx.com";
-const xLayerChainId = "196";
-
-// Helper functions
-const updateUserState = (user, state) => {
+// Helper function to update user state
+function updateUserState(user, state) {
   userStates[user.id] = { ...userStates[user.id], ...state };
-};
+}
 
-const clearUserState = (user) => {
-  delete userStates[user.id];
-};
-
-const sendReply = async (ctx, text, options = {}) => {
-  const message = await ctx.reply(text, options);
-  updateUserState(ctx.from, { messageId: message.message_id });
-};
-
-const handleUserState = async (ctx, handler) => {
-  const userState = userStates[ctx.from.id] || {};
-  if (
-    ctx.message.reply_to_message &&
-    ctx.message.reply_to_message.message_id === userState.messageId
-  ) {
-    await handler(ctx);
-  } else {
-    await ctx.reply("Please select an option from the menu.");
-  }
-};
-
-const getRequestUrl = (path, params = {}) => {
-  const url = new URL(path, apiBaseUrl);
-  Object.keys(params).forEach((key) =>
-    url.searchParams.append(key, params[key]),
+// Helper function to generate API request URL
+function getRequestUrl(path, params = {}) {
+  const url = new URL(path, API_BASE_URL);
+  Object.entries(params).forEach(([key, value]) =>
+    url.searchParams.append(key, value),
   );
   return url.toString();
-};
+}
 
-const getHeaders = (method, path, body = "") => {
+// Helper function to generate API headers
+function getHeaders(method, path, body = "") {
   const timestamp = new Date().toISOString();
   const signString = timestamp + method.toUpperCase() + path + body;
   const signature = crypto
@@ -80,13 +62,43 @@ const getHeaders = (method, path, body = "") => {
     "OK-ACCESS-PASSPHRASE": process.env.OKX_API_PASSPHRASE,
     "OK-ACCESS-PROJECT": process.env.OKX_PROJECT_ID,
   };
-};
+}
 
-// Bot command handlers
+// Helper function to send reply and update message ID
+async function sendReply(ctx, text, options = {}) {
+  const message = await ctx.reply(text, options);
+  updateUserState(ctx.from, { messageId: message.message_id });
+  return message;
+}
+
+// Create or get existing wallet address
+async function getOrCreateAddress(user) {
+  if (userStates[user.id]?.address) {
+    return userStates[user.id].address;
+  }
+
+  const mnemonic = await bip39.generateMnemonic();
+  const hdPath = await wallet.getDerivedPath({ index: 0 });
+  const privateKey = await wallet.getDerivedPrivateKey({
+    mnemonic,
+    hdPath,
+  });
+  const newAddress = await wallet.getNewAddress({ privateKey });
+
+  updateUserState(user, {
+    address: newAddress.address,
+    privateKey: privateKey,
+    publicKey: newAddress.publicKey,
+  });
+
+  return newAddress.address;
+}
+
+// Start command handler
 bot.command("start", async (ctx) => {
+  console.log("Processing start command...");
   const { from: user } = ctx;
-  updateUserState(user, {});
-  const userAddress = await getOrCreateAddress(user);
+  const address = await getOrCreateAddress(user);
 
   const keyboard = new InlineKeyboard()
     .text("Check Balance", "check_balance")
@@ -95,80 +107,21 @@ bot.command("start", async (ctx) => {
     .row()
     .text("Withdraw OKB", "withdraw_OKB")
     .row()
-    .text("Export key", "export_key")
+    .text("Export Key", "export_key")
     .row()
-    .text("Pin message", "pin_message");
+    .text("Pin Message", "pin_message");
 
-  const welcomeMessage = `
-  *Welcome to your XLayer Trading Bot!*
-  Your XLayer address is ${userAddress}.
-  Select an option below:`;
-
-  await sendReply(ctx, welcomeMessage, {
-    reply_markup: keyboard,
-    parse_mode: "Markdown",
-  });
-});
-
-// Callback query handlers
-const callbackHandlers = {
-  check_balance: handleCheckBalance,
-  deposit_OKB: handleDeposit,
-  withdraw_OKB: handleInitialWithdrawal,
-  pin_message: handlePinMessage,
-  export_key: handleExportKey,
-};
-
-bot.on("callback_query:data", async (ctx) => {
-  const handler = callbackHandlers[ctx.callbackQuery.data];
-  if (handler) {
-    await ctx.answerCallbackQuery();
-    await handler(ctx);
-  } else {
-    await ctx.reply("Unknown button clicked!");
-  }
-  console.log(
-    `User ID: ${ctx.from.id}, Username: ${ctx.from.username}, First Name: ${ctx.from.first_name}`,
+  await sendReply(
+    ctx,
+    `*Welcome to your XLayer Trading Bot!*\nYour XLayer address is ${address}.\nSelect an option below:`,
+    { reply_markup: keyboard, parse_mode: "Markdown" },
   );
 });
 
-// Handle user messages
-bot.on("message:text", async (ctx) =>
-  handleUserState(ctx, async () => {
-    const userState = userStates[ctx.from.id] || {};
-    if (userState.withdrawalRequested) await handleWithdrawal(ctx);
-  }),
-);
-
-// Get or create the user's address
-async function getOrCreateAddress(user) {
-  if (userStates[user.id]?.address) {
-    return userStates[user.id].address;
-  }
-
-  const wallet = new EthWallet();
-  const mnemonic = await bip39.generateMnemonic();
-  const hdPath = await wallet.getDerivedPath({ index: 0 });
-  const derivePrivateKey = await wallet.getDerivedPrivateKey({
-    mnemonic,
-    hdPath,
-  });
-  const newAddress = await wallet.getNewAddress({
-    privateKey: derivePrivateKey,
-  });
-
-  updateUserState(user, {
-    address: newAddress.address,
-    privateKey: derivePrivateKey,
-    publicKey: newAddress.publicKey,
-  });
-
-  return newAddress.address;
-}
-
-// Handle checking balance
+// Balance check handler
 async function handleCheckBalance(ctx) {
-  const userAddress = await getOrCreateAddress(ctx.from);
+  console.log("Checking balance...");
+  const address = await getOrCreateAddress(ctx.from);
 
   try {
     const response = await fetch(
@@ -179,80 +132,61 @@ async function handleCheckBalance(ctx) {
           "POST",
           "/api/v5/wallet/asset/token-balances-by-address",
           JSON.stringify({
-            address: userAddress,
-            tokenAddresses: [
-              {
-                chainIndex: "196",
-                tokenAddress: "",
-              },
-            ],
+            address,
+            tokenAddresses: [{ chainIndex: CHAIN_ID, tokenAddress: "" }],
           }),
         ),
         body: JSON.stringify({
-          address: userAddress,
-          tokenAddresses: [
-            {
-              chainIndex: "196",
-              tokenAddress: "",
-            },
-          ],
+          address,
+          tokenAddresses: [{ chainIndex: CHAIN_ID, tokenAddress: "" }],
         }),
       },
     );
-    const data = await response.json();
-    console.log("API Response:", JSON.stringify(data, null, 2));
 
-    if (data.code === "0" && Array.isArray(data.data) && data.data.length > 0) {
-      const tokenAssets = data.data[0].tokenAssets;
-      if (Array.isArray(tokenAssets) && tokenAssets.length > 0) {
-        const token = tokenAssets[0];
-        if (
-          token &&
-          token.balance !== undefined &&
-          token.tokenPrice !== undefined
-        ) {
-          const balance = parseFloat(token.balance).toFixed(8);
-          const value = (
-            parseFloat(token.balance) * parseFloat(token.tokenPrice)
-          ).toFixed(2);
-          const symbol = token.symbol || "OKB"; // Use "OKB" if symbol is empty
-          await sendReply(
-            ctx,
-            `Your XLayer ${symbol} balance:\n${balance} ${symbol} (USD ${value})`,
-          );
-        } else {
-          console.error("Unexpected token data structure:", token);
-          throw new Error("Invalid token data received");
-        }
-      } else {
-        throw new Error("No token assets found");
-      }
+    const data = await response.json();
+    console.log("Balance API Response:", JSON.stringify(data, null, 2));
+
+    if (data.code === "0" && data.data?.[0]?.tokenAssets?.[0]) {
+      const {
+        balance,
+        tokenPrice,
+        symbol = "OKB",
+      } = data.data[0].tokenAssets[0];
+      const formattedBalance = parseFloat(balance).toFixed(8);
+      const value = (parseFloat(balance) * parseFloat(tokenPrice)).toFixed(2);
+
+      await sendReply(
+        ctx,
+        `Your XLayer ${symbol} balance:\n${formattedBalance} ${symbol} (USD ${value})`,
+      );
     } else {
-      console.error("Unexpected API response:", data);
       throw new Error(data.msg || "No balance data received");
     }
   } catch (error) {
-    console.error("Error checking balance:", error);
+    console.error("Balance check error:", error);
     await ctx.reply(
       "An error occurred while checking your balance. Please try again later.",
     );
   }
 }
 
-// Handle deposits
+// Deposit handler
 async function handleDeposit(ctx) {
-  const userAddress = await getOrCreateAddress(ctx.from);
+  console.log("Processing deposit request...");
+  const address = await getOrCreateAddress(ctx.from);
+
   await sendReply(
     ctx,
     "_Note: Make sure to deposit only to this address on the XLayer network!_",
     { parse_mode: "Markdown" },
   );
   await sendReply(ctx, "Please send your OKB to the following address:");
-  await sendReply(ctx, `\`${userAddress}\``, { parse_mode: "Markdown" });
+  await sendReply(ctx, `\`${address}\``, { parse_mode: "Markdown" });
 }
 
-// Handle initial withdrawal request
-async function handleInitialWithdrawal(ctx) {
+// Withdrawal flow handlers
+async function handleWithdrawalRequest(ctx) {
+  console.log("Starting withdrawal flow...");
   updateUserState(ctx.from, { withdrawalRequested: true });
   await sendReply(
     ctx,
@@ -261,133 +195,143 @@ async function handleInitialWithdrawal(ctx) {
   );
 }
 
-// Handle withdrawals
 async function handleWithdrawal(ctx) {
   const userState = userStates[ctx.from.id] || {};
+  console.log("Processing withdrawal...");
+
   if (!userState.withdrawalAmount) {
-    const withdrawalAmount = parseFloat(ctx.message.text);
-    if (isNaN(withdrawalAmount) || withdrawalAmount <= 0) {
+    const amount = parseFloat(ctx.message.text);
+    if (isNaN(amount) || amount <= 0) {
       await ctx.reply(
         "Invalid withdrawal amount. Please enter a positive number.",
       );
-      // clearUserState(ctx.from);
-    } else {
-      await sendReply(
-        ctx,
-        "Please respond with the XLayer address where you would like to receive the OKB.",
-        { reply_markup: { force_reply: true } },
-      );
-      updateUserState(ctx.from, {
-        withdrawalAmount,
-      });
+      return;
     }
-  } else {
-    const destination = ctx.message.text;
-    const wallet = new EthWallet();
-    try {
-      const isValidAddress = await wallet.validAddress({
-        address: destination,
-      });
-      if (!isValidAddress) {
-        await ctx.reply("Invalid destination address. Please try again.");
-        // clearUserState(ctx.from);
-        return;
-      }
-      await sendReply(ctx, "Initiating withdrawal...");
 
-      // Convert withdrawalAmount to wei (1 OKB = 10^18 wei)
-      const txAmountInWei = `${new BigNumber(userState.withdrawalAmount).times(1e18)}`;
+    updateUserState(ctx.from, { withdrawalAmount: amount });
+    await sendReply(
+      ctx,
+      "Please respond with the XLayer address where you would like to receive the OKB.",
+      { reply_markup: { force_reply: true } },
+    );
+    return;
+  }
 
-      const signInfoResponse = await fetch(
-        getRequestUrl("/api/v5/wallet/pre-transaction/sign-info"),
-        {
-          method: "POST",
-          headers: getHeaders(
-            "POST",
-            "/api/v5/wallet/pre-transaction/sign-info",
-            JSON.stringify({
-              chainIndex: xLayerChainId,
-              fromAddr: userState.address,
-              toAddr: destination,
-              txAmount: txAmountInWei,
-            }),
-          ),
-          body: JSON.stringify({
-            chainIndex: xLayerChainId,
+  const destination = ctx.message.text.toLowerCase();
+  if (!destination.startsWith("0x") || destination.length !== 42) {
+    await ctx.reply(
+      "Invalid destination address format. Please provide a valid Ethereum address.",
+    );
+    return;
+  }
+
+  try {
+    await sendReply(ctx, "Initiating withdrawal...");
+
+    const weiAmount = new BigNumber(userState.withdrawalAmount).times(1e18);
+    console.log(`Amount in wei: ${weiAmount.toString()}`);
+
+    // Get transaction info
+    const signInfoResponse = await fetch(
+      getRequestUrl("/api/v5/wallet/pre-transaction/sign-info"),
+      {
+        method: "POST",
+        headers: getHeaders(
+          "POST",
+          "/api/v5/wallet/pre-transaction/sign-info",
+          JSON.stringify({
+            chainIndex: CHAIN_ID,
             fromAddr: userState.address,
             toAddr: destination,
-            txAmount: txAmountInWei,
+            txAmount: weiAmount.toString(),
           }),
-        },
-      );
-      const signInfoData = await signInfoResponse.json();
-      if (signInfoData.code !== "0") {
-        throw new Error(signInfoData.msg);
-      }
-      const txData = signInfoData.data[0];
+        ),
+        body: JSON.stringify({
+          chainIndex: CHAIN_ID,
+          fromAddr: userState.address,
+          toAddr: destination,
+          txAmount: weiAmount.toString(),
+        }),
+      },
+    );
 
-      // Prepare transaction data
-      const txParams = {
-        to: destination,
-        value: txAmountInWei,
-        nonce: txData.nonce,
-        gasPrice: txData.gasPrice.normal,
-        gasLimit: txData.gasLimit,
-        chainId: xLayerChainId,
-      };
+    const signInfoData = await signInfoResponse.json();
+    console.log("Sign info response:", signInfoData);
 
-      console.log("Transaction params:", txParams);
+    if (signInfoData.code !== "0") {
+      throw new Error(signInfoData.msg || "Failed to get transaction info");
+    }
 
-      const signedTx = await wallet.signTransaction(parseInt(xLayerChainId), {
-        privateKey: userState.privateKey,
-        data: txParams,
-      });
+    const txData = signInfoData.data[0];
+    const txParams = {
+      to: destination,
+      value: weiAmount,
+      nonce: parseInt(txData.nonce),
+      gasPrice: new BigNumber(txData.gasPrice.normal),
+      gasLimit: new BigNumber(txData.gasLimit),
+      chainId: parseInt(CHAIN_ID),
+    };
 
-      console.log("Signed transaction:", signedTx);
+    console.log("Transaction params:", txParams);
 
-      const broadcastResponse = await fetch(
-        getRequestUrl("/api/v5/wallet/pre-transaction/broadcast-transaction"),
-        {
-          method: "POST",
-          headers: getHeaders(
-            "POST",
-            "/api/v5/wallet/pre-transaction/broadcast-transaction",
-            JSON.stringify({
-              signedTx: signedTx,
-              chainIndex: xLayerChainId,
-              address: userState.address,
-            }),
-          ),
-          body: JSON.stringify({
-            signedTx: signedTx,
-            chainIndex: xLayerChainId,
+    const privateKey = userState.privateKey.startsWith("0x")
+      ? userState.privateKey
+      : "0x" + userState.privateKey;
+
+    const signedTx = await wallet.signTransaction({
+      privateKey,
+      data: txParams,
+    });
+
+    console.log("Transaction signed successfully");
+
+    const broadcastResponse = await fetch(
+      getRequestUrl("/api/v5/wallet/pre-transaction/broadcast-transaction"),
+      {
+        method: "POST",
+        headers: getHeaders(
+          "POST",
+          "/api/v5/wallet/pre-transaction/broadcast-transaction",
+          JSON.stringify({
+            signedTx,
+            chainIndex: CHAIN_ID,
             address: userState.address,
           }),
-        },
-      );
-      const broadcastData = await broadcastResponse.json();
-      console.log("Broadcast response:", broadcastData);
+        ),
+        body: JSON.stringify({
+          signedTx,
+          chainIndex: CHAIN_ID,
+          address: userState.address,
+        }),
+      },
+    );
 
-      if (broadcastData.code === "0") {
-        await sendReply(
-          ctx,
-          `Successfully initiated withdrawal of ${userState.withdrawalAmount} OKB to ${destination}. Transaction ID: ${broadcastData.data[0].orderId}`,
-          { parse_mode: "Markdown" },
-        );
-      } else {
-        throw new Error(broadcastData.msg || "Failed to broadcast transaction");
-      }
-      // clearUserState(ctx.from);
-    } catch (error) {
-      console.error("Error during withdrawal:", error);
-      await ctx.reply("An error occurred while initiating the withdrawal.");
-      // clearUserState(ctx.from);
+    const broadcastData = await broadcastResponse.json();
+    console.log("Broadcast response:", broadcastData);
+
+    if (broadcastData.code === "0") {
+      await sendReply(
+        ctx,
+        `Successfully initiated withdrawal of ${userState.withdrawalAmount} OKB to ${destination}. Transaction ID: ${broadcastData.data[0].orderId}`,
+        { parse_mode: "Markdown" },
+      );
+    } else {
+      throw new Error(broadcastData.msg || "Failed to broadcast transaction");
     }
+  } catch (error) {
+    console.error("Withdrawal error:", error);
+    await ctx.reply(
+      "An error occurred while initiating the withdrawal. Error: " +
+        (error.message || "Unknown error"),
+    );
   }
 }
-// Handle exporting the key
+
+// Export private key handler
 async function handleExportKey(ctx) {
+  console.log("Processing key export request...");
   const userState = userStates[ctx.from.id];
+
   if (userState?.privateKey) {
     await sendReply(
       ctx,
@@ -403,8 +347,9 @@ async function handleExportKey(ctx) {
   }
 }
 
-// Handle pinning the start message
+// Pin message handler
 async function handlePinMessage(ctx) {
+  console.log("Attempting to pin message...");
   try {
     await ctx.api.pinChatMessage(
       ctx.chat.id,
@@ -412,15 +357,56 @@ async function handlePinMessage(ctx) {
     );
     await ctx.reply("Message pinned successfully!");
   } catch (error) {
-    console.error("Failed to pin the message:", error);
+    console.error("Pin message error:", error);
     await ctx.reply(
       "Failed to pin the message. Ensure the bot has the proper permissions.",
     );
   }
-  // clearUserState(ctx.from);
 }
 
-// Start the bot (using long polling)
-bot.start();
+// Register callback handlers
+const callbackHandlers = {
+  check_balance: handleCheckBalance,
+  deposit_OKB: handleDeposit,
+  withdraw_OKB: handleWithdrawalRequest,
+  export_key: handleExportKey,
+  pin_message: handlePinMessage,
+};
 
+// Handle callback queries
+bot.on("callback_query:data", async (ctx) => {
+  const handler = callbackHandlers[ctx.callbackQuery.data];
+  if (handler) {
+    console.log(`Executing callback handler: ${ctx.callbackQuery.data}`);
+    await ctx.answerCallbackQuery();
+    await handler(ctx);
+  } else {
+    console.log(`Unknown callback received: ${ctx.callbackQuery.data}`);
+    await ctx.reply("Unknown button clicked!");
+  }
+
+  console.log(
+    `User interaction - ID: ${ctx.from.id}, Username: ${ctx.from.username}, First Name: ${ctx.from.first_name}`,
+  );
+});
+
+// Handle text messages for withdrawal flow
+bot.on("message:text", async (ctx) => {
+  const userState = userStates[ctx.from.id] || {};
+  const messageId = ctx.message?.reply_to_message?.message_id;
+
+  if (userState.withdrawalRequested && messageId === userState.messageId) {
+    await handleWithdrawal(ctx);
+  }
+});
+
+// Error handler
+bot.catch((err) => {
+  console.error("Bot error:", err);
+});
+
+// Start the bot
+bot.start();
 console.log("XLayer Trading bot is running...");
+
+module.exports = bot;
