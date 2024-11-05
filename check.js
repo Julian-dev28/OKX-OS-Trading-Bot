@@ -48,12 +48,12 @@ function getHeaders(method, path, params = {}) {
     };
 }
 
-async function checkTransaction(orderId) {
+async function checkTransaction(accountId, orderId) {
     // Added accountId parameter
     const params = {
+        accountId: accountId, // Add accountId to params
         orderId: orderId,
         chainIndex: CHAIN_ID,
-        accountId: process.env.OKX_PROJECT_ID, // Add accountId to params
     };
 
     try {
@@ -77,7 +77,8 @@ async function checkTransaction(orderId) {
 }
 
 async function main() {
-    const orderId = process.argv[2];
+    const accountId = process.argv[2];
+    const orderId = process.argv[3];
     // const accountId = process.argv[3]; // Get accountId as second argument
 
     if (!orderId) {
@@ -87,7 +88,7 @@ async function main() {
     }
 
     console.log(`Checking transaction ${orderId}`);
-    await checkTransaction(orderId);
+    await checkTransaction(accountId, orderId);
 }
 
 main().catch(console.error);
