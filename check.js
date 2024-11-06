@@ -6,13 +6,18 @@ const API_BASE_URL = "https://www.okx.com";
 const CHAIN_ID = "196";
 
 // Environment check
-if (
-    !process.env.OKX_API_KEY ||
-    !process.env.OKX_API_SECRET_KEY ||
-    !process.env.OKX_API_PASSPHRASE ||
-    !process.env.OKX_PROJECT_ID
-) {
-    throw new Error("Missing environment variables");
+const REQUIRED_ENV = [
+    "OKX_API_KEY",
+    "OKX_API_SECRET_KEY",
+    "OKX_API_PASSPHRASE",
+    "OKX_PROJECT_ID",
+];
+
+for (const env of REQUIRED_ENV) {
+    if (!process.env[env]) {
+        console.error(`Error: Missing ${env} environment variable`);
+        process.exit(1);
+    }
 }
 
 function getRequestUrl(path, params = {}) {
@@ -25,11 +30,7 @@ function getRequestUrl(path, params = {}) {
 
 function getHeaders(method, path, params = {}) {
     const timestamp = new Date().toISOString();
-
-    const queryString = Object.entries(params)
-        .map(([key, value]) => `${key}=${value}`)
-        .join("&");
-
+    const queryString = new URLSearchParams(params).toString();
     const pathWithQuery = queryString ? `${path}?${queryString}` : path;
     const signString = timestamp + method.toUpperCase() + pathWithQuery;
 
@@ -48,30 +49,74 @@ function getHeaders(method, path, params = {}) {
     };
 }
 
+function formatTxStatus(status) {
+    const statusMap = {
+        0: "Processing",
+        1: "Pending",
+        2: "Success",
+        3: "Failed",
+    };
+    return statusMap[status] || "Unknown";
+}
+
+function formatTransaction(tx) {
+    if (!tx) return null;
+
+    return {
+        status: formatTxStatus(tx.txStatus),
+        orderId: tx.orderId,
+        hash: tx.txhash || "Pending",
+        blockHeight: tx.blockHeight || "Pending",
+        blockTime: tx.blockTime
+            ? new Date(parseInt(tx.blockTime)).toLocaleString()
+            : "Pending",
+        gasUsed: tx.gasUsed || "0",
+        gasLimit: tx.gasLimit || "0",
+        gasPrice: tx.gasPrice ? `${tx.gasPrice} Gwei` : "Pending",
+        fee: tx.feeUsdValue ? `$${tx.feeUsdValue}` : "Pending",
+        fromAddr: tx.txDetail?.[0]?.fromAddr || "N/A",
+        toAddr: tx.txDetail?.[0]?.toAddr || "N/A",
+    };
+}
+
 async function checkTransaction(accountId, orderId) {
-    // Added accountId parameter
     const params = {
-        accountId: accountId, // Add accountId to params
-        orderId: orderId,
+        accountId,
+        orderId,
         chainIndex: CHAIN_ID,
     };
 
     try {
         const path = "/api/v5/wallet/post-transaction/orders";
         const url = getRequestUrl(path, params);
-
         const headers = getHeaders("GET", path, params);
 
-        const response = await fetch(url, {
-            method: "GET",
-            headers: headers,
+        console.log("\nFetching transaction details...");
+        const response = await fetch(url, { method: "GET", headers });
+        const data = await response.json();
+
+        if (data.code !== "0") {
+            throw new Error(`API Error: ${data.msg || "Unknown error"}`);
+        }
+
+        if (!data.data || data.data.length === 0) {
+            console.log("\nTransaction Status: Processing");
+            console.log(`Order ID: ${orderId}`);
+            console.log("Message: Transaction is still being processed");
+            return;
+        }
+
+        const txInfo = formatTransaction(data.data[0]);
+
+        console.log("\nTransaction Details:");
+        console.log("==================");
+        Object.entries(txInfo).forEach(([key, value]) => {
+            console.log(`${key.padEnd(12)}: ${value}`);
         });
 
-        const data = await response.json();
-        console.log("Transaction Details:", JSON.stringify(data, null, 2));
         return data;
     } catch (error) {
-        console.error("Error fetching transaction:", error);
+        console.error("\nError fetching transaction:", error.message);
         throw error;
     }
 }
@@ -79,16 +124,21 @@ async function checkTransaction(accountId, orderId) {
 async function main() {
     const accountId = process.argv[2];
     const orderId = process.argv[3];
-    // const accountId = process.argv[3]; // Get accountId as second argument
 
-    if (!orderId) {
-        console.error("Please provide both orderId");
-        console.error("Usage: node s.js <orderId>");
+    if (!accountId || !orderId) {
+        console.error("\nError: Missing required parameters");
+        console.error("Usage: node check.js <accountId> <orderId>");
         process.exit(1);
     }
 
-    console.log(`Checking transaction ${orderId}`);
-    await checkTransaction(accountId, orderId);
+    try {
+        console.log(`\nChecking transaction: ${orderId}`);
+        console.log(`Account ID: ${accountId}`);
+        await checkTransaction(accountId, orderId);
+    } catch (error) {
+        console.error("\nScript execution failed:", error.message);
+        process.exit(1);
+    }
 }
 
 main().catch(console.error);
