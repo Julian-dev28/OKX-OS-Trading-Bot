@@ -3,7 +3,6 @@ const { bip39, BigNumber } = require("@okxweb3/crypto-lib");
 const { EthWallet } = require("@okxweb3/coin-ethereum");
 const fetch = require("node-fetch");
 const crypto = require("crypto");
-const { clear } = require("console");
 
 // Validate required environment variables
 const REQUIRED_ENV = [

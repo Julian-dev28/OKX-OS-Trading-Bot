@@ -1,6 +1,6 @@
 # Telegram Trading Bot
 
-This provides a template for Telegram trading bot on X Layer Mainnet that uses and [Wallet APIs](https://docs.cdp.coinbase.com/mpc-wallet/docs/welcome), and [Dex APIs](https://www.okx.com/web3/build/docs/waas/dex-introduction) from  [OKX OS]([https://www.okx.com/web3/build/docs/waas/okx-waas-what-is-waas](https://www.okx.com/web3/build)) 
+This provides a template for Telegram trading bot on X Layer Mainnet that uses and [Wallet APIs](https://docs.cdp.coinbase.com/mpc-wallet/docs/welcome), and [Dex APIs](https://www.okx.com/web3/build/docs/waas/dex-introduction) from [OKX OS](https://www.okx.com/web3/build/docs/waas/okx-waas-what-is-waas)
 
 It stores wallet data in a the local Replit database.
 
